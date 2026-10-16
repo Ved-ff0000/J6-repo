@@ -1,0 +1,26 @@
+SYNTHETIC COMMERCIAL LEASE — DEVELOPMENT FIXTURE ONLY
+This is fictional test content, not legal advice or a real agreement.
+
+1. Parties
+Landlord: Example Properties Test Company
+Tenant: Synthetic Retail Test Company
+Property: Fictional Commerce Center, Unit TEST-101
+
+2. Term
+Commencement date: January 1, 2027
+Expiration date: December 31, 2031
+
+3. Rent
+Base rent is USD 5,000 per calendar month, payable on the first day.
+Annual escalation: three percent on each anniversary of commencement.
+
+4. Renewal option
+Tenant has one five-year renewal option, subject to written notice at least
+180 days before expiration. This fixture does not establish any real rights.
+
+5. Deposit and obligations
+Security deposit: USD 10,000.
+Tenant maintains interior fixtures. Landlord maintains the structural roof.
+
+Original bytes are retained. Phase 5 may parse text and form source-backed chunks.
+No lease fields are extracted or approved and no compliance decision is produced.
