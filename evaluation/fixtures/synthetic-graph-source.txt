@@ -1,0 +1,10 @@
+SYNTHETIC GRAPH SOURCE — NOT A REAL LEASE
+Lease Alpha
+Tenant Beta
+Landlord Gamma
+Property Delta
+Clause Rent
+
+This fictional source is for manual graph-proposal and evidence-linkage tests.
+Names occurring here do not verify their entity type, party role, or relationship.
+No legal approval, automatic extraction or business decision is produced.

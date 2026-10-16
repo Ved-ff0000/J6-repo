@@ -1,0 +1,171 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: leaseguard
+      POSTGRES_USER: leaseguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leaseguard}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leaseguard -d leaseguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  neo4j:
+    image: neo4j:5.26.16-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-leaseguard-local-graph-only}
+      NEO4J_server_memory_heap_initial__size: 128m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-leaseguard-dev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-leaseguard-local-storage-only}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+  storage-init:
+    build: ./backend
+    command: ["python", "-m", "app.documents.init_storage"]
+    env_file: &backend_env_file
+      - path: .env
+        required: false
+    environment: &storage_environment
+      LEASEGUARD_STORAGE_BACKEND: s3
+      LEASEGUARD_S3_ENDPOINT: http://minio:9000
+      LEASEGUARD_S3_BUCKET: leaseguard-documents
+      LEASEGUARD_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-leaseguard-dev}
+      LEASEGUARD_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-leaseguard-local-storage-only}
+    depends_on:
+      minio:
+        condition: service_started
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    env_file: *backend_env_file
+    environment: &backend_environment
+      <<: *storage_environment
+      LEASEGUARD_DATABASE_URL: postgresql+asyncpg://leaseguard:${POSTGRES_PASSWORD:-leaseguard}@postgres:5432/leaseguard
+      LEASEGUARD_REDIS_URL: redis://redis:6379/0
+      LEASEGUARD_QDRANT_URL: http://qdrant:6333
+      LEASEGUARD_NEO4J_URI: bolt://neo4j:7687
+      LEASEGUARD_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-leaseguard-local-graph-only}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  backend:
+    build: ./backend
+    env_file: *backend_env_file
+    environment: *backend_environment
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.processing.worker"]
+    env_file: *backend_env_file
+    environment: *backend_environment
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 1g
+    pids_limit: 128
+  index-worker:
+    build: ./backend
+    command: ["python", "-m", "app.search.worker"]
+    env_file: *backend_env_file
+    environment: *backend_environment
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 1g
+    pids_limit: 128
+  graph-worker:
+    build: ./backend
+    command: ["python", "-m", "app.graph.worker"]
+    env_file: *backend_env_file
+    environment: *backend_environment
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 1g
+    pids_limit: 128
+  operations-worker:
+    build: ./backend
+    command: ["python", "-m", "app.operations.worker"]
+    env_file: *backend_env_file
+    environment: *backend_environment
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 512m
+    pids_limit: 64
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:
+  neo4j_data:
