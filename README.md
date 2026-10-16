@@ -75,53 +75,164 @@ pypdf performs PDF parsing; safe Word XML parsing preserves DOCX text/tables.
 SQLite/local files are used for isolated tests; an explicit development filesystem
 adapter is also available. Upload validation uses python-multipart and defusedxml.
 
-## Quick start — Docker
+## Installation
 
-Prerequisites: Docker with Compose **2.24+** and Python for the local key helper.
+Two supported paths, both run from the repository root: **Option A — Docker
+Compose** (recommended; builds and wires the complete stack) and **Option B —
+manual** (native Python/Node processes with Compose only for the data services).
+
+### 1. Prerequisites
+
+| Tool | Version | Needed for |
+| --- | --- | --- |
+| Git | any recent | cloning the repository |
+| Docker with Compose plugin | Compose **2.24+** | Option A; data services in Option B |
+| Python | **3.12+** | `scripts/init_dev_env.py` (both options); backend (Option B) |
+| Node.js | **22.12+** (or 24 / 26+) | frontend (Option B) |
+| npm | bundled with Node | frontend dependencies (Option B) |
+
+No GitHub token, LLM API key or paid service is required for the default
+development install; AI generation stays disabled unless explicitly configured.
+
+### 2. Get the source
 
 ```sh
-python scripts/init_dev_env.py  # creates .env once with a random signing key
-# If .env exists, leave it intact and configure its key as described in the runbook.
+git clone https://github.com/Ved-ff0000/J6-repo.git
+cd J6-repo
+```
+
+### 3. Create the environment file (both options)
+
+```sh
+python scripts/init_dev_env.py
+```
+
+Creates `.env` **once** from `.env.example` with a random `LEASEGUARD_JWT_SECRET`
+and aligned random local MinIO/Neo4j credentials — never printed, stored with
+`chmod 600`, never overwritten. If `.env` already exists the script exits without
+changes; leave it intact and configure its signing key as described in
+[Configuration](#configuration).
+
+### 4. Option A — Docker install (recommended)
+
+```sh
 docker compose up --build
 ```
 
-Open `http://localhost:8080/register` to create a synthetic organization. Open
-Settings to create/manage test users, then Documents to upload
-`evaluation/fixtures/synthetic-commercial-lease.txt`. Versions retain original bytes;
-parsing is an explicit separate step, with no AI extraction or malware clearance.
-Backend OpenAPI is at `http://localhost:8000/docs`. The frontend proxies `/api/*`.
-Compose starts PostgreSQL, Redis and MinIO, initializes the private document bucket,
-runs migrations, then starts the readiness-gated backend/frontend. PostgreSQL and
-MinIO use persistent volumes. `docker compose down` stops
-services without deleting those volumes. There is no backup system yet.
+This builds the images and starts, in dependency order:
+
+1. **Data services** — PostgreSQL 16 (`localhost:5432`), Redis 7 (`6379`),
+   MinIO (`9000`, console `9001`), Qdrant v1.17.0 (`6333`) and Neo4j 5.26
+   community (`7474`/`7687`). All are loopback-bound with persistent volumes
+   (`postgres_data`, `minio_data`, `qdrant_data`, `neo4j_data`).
+2. **`storage-init`** — creates the private `leaseguard-documents` bucket.
+3. **`migrate`** — applies all Alembic migrations (`alembic upgrade head`).
+4. **`backend`** — FastAPI on `http://localhost:8000`, installed on Python 3.12
+   from `backend/requirements.lock` with hash verification; readiness-gated.
+5. **Workers** — `worker` (parsing), `index-worker` (vector indexing),
+   `graph-worker` (Neo4j projection) and `operations-worker` (governed ops).
+6. **`frontend`** — production build served by Nginx on `http://localhost:8080`,
+   proxying `/api/*` to the backend.
+
+`docker compose down` stops services without deleting those volumes; there is no
+backup system yet.
+
+### 5. Option B — Manual install (native processes)
+
+1. **Backend dependencies** — virtualenv plus the editable install with dev tools:
+
+   ```sh
+   python3.12 -m venv .venv
+   . .venv/bin/activate
+   pip install -e './backend[dev]'
+   ```
+
+   For the exact pinned container set instead:
+   `pip install --require-hashes -r backend/requirements.lock`.
+
+2. **Backend environment** — settings load `.env` relative to the backend working
+   directory:
+
+   ```sh
+   cp .env backend/.env   # don't overwrite an existing customized backend/.env
+   ```
+
+3. **Data services** — via Compose (or locally managed equivalents):
+
+   ```sh
+   docker compose up -d postgres redis minio   # core
+   docker compose up -d qdrant neo4j           # retrieval and graph features
+   ```
+
+4. **Storage and database initialization** — from `backend/` with the venv active:
+
+   ```sh
+   cd backend
+   python -m app.documents.init_storage   # creates the private document bucket
+   alembic upgrade head                   # applies all migrations
+   ```
+
+5. **Frontend dependencies**:
+
+   ```sh
+   cd frontend
+   npm ci
+   ```
+
+Continue with the run commands in [Local development](#local-development).
+
+### 6. Verify the installation
+
+| Check | Expected result |
+| --- | --- |
+| `curl http://localhost:8000/live` | HTTP 200 — process liveness |
+| `curl http://localhost:8000/ready` | HTTP 200 only when the PostgreSQL schema baseline, Redis and object storage pass (plus Qdrant/Neo4j when enabled); otherwise sanitized 503 |
+| `http://localhost:8000/docs` | Backend OpenAPI schema |
+| `http://localhost:8080` (A) / `http://localhost:5173` (B) | Sign-in / register UI |
+| `./scripts/check.sh` | Frontend format/typecheck/tests/build and backend lint/format/mypy/pytest all pass |
+
+### 7. First run
+
+Open `http://localhost:8080/register` (Option A) or `http://localhost:5173/register`
+(Option B) to create a synthetic organization. Open Settings to create/manage test
+users, then Documents to upload `evaluation/fixtures/synthetic-commercial-lease.txt`.
+Versions retain original bytes; parsing is an explicit separate step, with no AI
+extraction or malware clearance. Use synthetic data only.
 
 ## Local development
 
-Prerequisites: Node **22.12+** (or supported newer LTS), npm, Python **3.12+** and
-PostgreSQL/Redis/MinIO (or Docker Compose for those dependencies).
+With the manual installation complete and data services running, use two terminals
+from the repository root (venv active in the backend terminal).
+
+Backend:
 
 ```sh
-python3.12 -m venv .venv
-. .venv/bin/activate
-pip install -e './backend[dev]'
-python scripts/init_dev_env.py  # skip if already created
-cp .env backend/.env           # don't overwrite custom settings
-docker compose up -d postgres redis minio
 cd backend
-python -m app.documents.init_storage
-alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
 ```
 
-In a separate terminal:
+Frontend, in a separate terminal:
 
 ```sh
 cd frontend
-npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173`. Run migrations after every schema change.
+Open `http://localhost:5173`; Vite proxies `/api/*` to the backend (override the
+target by exporting `API_PROXY_TARGET` before `npm run dev`). Run
+`alembic upgrade head` after every schema change.
+
+Optional workers run locally from `backend/` with the same settings as the backend:
+
+```sh
+python -m app.processing.worker    # parsing jobs
+python -m app.search.worker        # vector indexing
+python -m app.graph.worker         # Neo4j projection
+python -m app.operations.worker    # governed operations
+```
+
+The processing worker needs POSIX/Linux resource-limit support; see the Phase 5
+runbook.
 
 ## Configuration
 
